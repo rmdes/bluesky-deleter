@@ -1,5 +1,5 @@
 In some cases, you may find that you need to bulk-delete many posts from your Bluesky account. For example, perhaps you shared many links to a particular domain and now you want to remove them en masse. Doing this manually would be tedious. Fortunately, we can automate the process using a script written in TypeScript.
-
+blog post about it https://blog.rmendes.net/2024/12/15/how-to-bulk.html
 
 This script leverages the official `@atproto/api` package to:
 1. Log into your Bluesky account.
