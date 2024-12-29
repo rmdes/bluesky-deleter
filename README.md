@@ -41,7 +41,26 @@ This script leverages the official `@atproto/api` package to:
   ```bash
   npm install @atproto/api p-ratelimit
   ```
- 
+- **Use a CommonJS Approach:**
+If you simply want to run ts-node in a CommonJS environment (the traditional way):
+
+Install ts-node and typescript locally (if not already):
+  ```bash
+npm install --save-dev ts-node typescript
+  ```
+Set "module": "commonjs" (and "target": "ES2020" or later) in your tsconfig.json. For example:
+  ```bash
+    {
+      "compilerOptions": {
+        "target": "ES2020",
+        "module": "commonjs",
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true
+      }
+    }
+  ```
 ## Credentials
 
 
