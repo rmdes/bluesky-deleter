@@ -1,87 +1,96 @@
-In some cases, you may find that you need to bulk-delete many posts from your Bluesky account. For example, perhaps you shared many links to a particular domain and now you want to remove them en masse. Doing this manually would be tedious. Fortunately, we can automate the process using a script written in TypeScript.
-blog post about it https://blog.rmendes.net/2024/12/15/how-to-bulk.html
+# bluesky-deleter
 
-This script leverages the official `@atproto/api` package to:
-1. Log into your Bluesky account.
-2. Fetch all posts that match certain criteria (e.g., containing a specific domain in their facets, embeds, or entities).
-3. Delete them in batches while respecting and reacting to rate limits.
+Bulk-delete the posts on your Bluesky account(s) that link to particular domains. Useful when you shared many links to a site and now want them gone without clicking through thousands of posts.
 
+Background: [How to bulk delete Bluesky posts](https://blog.rmendes.net/2024/12/15/how-to-bulk.html) (describes the original single-file version).
 
-## Key Features
+## How it works
 
+For each account, the tool walks the post collection oldest-first, 100 records at a time. Each page's matching posts are deleted in one `applyWrites` call before the next page is fetched, and the position is saved to `.sweep-state.json`. Memory use is constant and a stopped run resumes where it left off.
 
-- **Domain-based Filtering:**  
-  The script identifies posts containing a specific domain by checking:
-  - Facets with `app.bsky.richtext.facet#link`.
-  - External embeds with `app.bsky.embed.external`.
-  - Legacy entities with `type: link`.
-  
-- **Rate Limit Management (Proactive):**  
-  The Bluesky PDS imposes a rate limit of 5000 deletion points per hour. Deletions cost 1 point each. The script proactively monitors how many deletions it has performed within the current hour. When it approaches the limit, it waits until the hour has elapsed before continuing.
+A post matches when one of its links points at a configured domain or a subdomain of it. Links are read from:
 
+- rich-text link facets (`app.bsky.richtext.facet#link`)
+- link-card embeds (`app.bsky.embed.external`), including inside a quote-with-media embed
+- legacy `entities` of type `link`
 
-- **Rate Limit Management (Fallback):**  
-  If the script ever hits a `429 Rate Limit Exceeded` error, it will parse the `ratelimit-reset` header and wait until the given time before retrying that batch of deletions. This ensures that if the proactive limit check is not enough, the script still handles the server’s instructions gracefully.
+Matching is on the URL's hostname, so `example.com` matches `videos.example.com` but not `notexample.com` or a URL that only mentions the domain in its path or query. A domain written in plain text without a link is not matched.
 
+## Rate limits: large cleanups take hours or days
 
-- **Batch Operations and Delays:**  
-  To avoid rapid-fire requests, the script:
-  - Performs deletions in configurable batch sizes (default: 200 per batch).
-  - Waits a short delay between batches to spread requests out over time.
+Bluesky's PDS gives each account a write budget of **5,000 points per hour and 35,000 points per day**, and a delete costs 1 point. So deleting 34,000 posts takes at least seven hours, and anything above 35,000 spills into the next day. This is a server limit; no client can go faster.
 
+When the budget runs out the server answers `429` with a `ratelimit-reset` time. The tool logs when it will resume and sleeps until then:
 
-## Prerequisites
+```
+[you.bsky.social] Rate limited (policy 35000;w=86400). Resuming at 14/11/2026, 08:41:07, in 9h 31m. Progress is saved; safe to stop and restart.
+```
 
+You can leave it running, or stop it and start it again later. Either way it continues from the checkpoint. Accounts are swept concurrently, since each has its own budget.
 
-- **Node.js and npm:**  
-  Ensure you have a recent version of Node.js installed.
+## Setup
 
-
-- **Install Dependencies:**
-  ```bash
-  npm install @atproto/api p-ratelimit
-  ```
-- **Use a CommonJS Approach:**
-If you simply want to run ts-node in a CommonJS environment (the traditional way):
-
-Install ts-node and typescript locally (if not already):
-  ```bash
-npm install --save-dev ts-node typescript
-  ```
-Set "module": "commonjs" (and "target": "ES2020" or later) in your tsconfig.json. For example:
-  ```bash
-    {
-      "compilerOptions": {
-        "target": "ES2020",
-        "module": "commonjs",
-        "strict": true,
-        "esModuleInterop": true,
-        "skipLibCheck": true,
-        "forceConsistentCasingInFileNames": true
-      }
-    }
-  ```
-## Credentials
-
-
-Replace your-handle and your-password in the script with your Bluesky account credentials. You should only do this with an account you control and trust running scripts on.
-
-
-## Running the Script
-
-
-Save the script below as bluesky-sweep.ts.
-
-
-Run it using:
-
+Requires Node.js 22.18 or newer (it runs the TypeScript sources directly).
 
 ```bash
-npx ts-node bluesky-sweep.ts
+npm install
+cp .env.example .env
 ```
-## Configuration Parameters
-- TARGET_DOMAIN: Set this to the domain you want to search for in your posts.
-- DELETES_PER_BATCH: Number of posts per deletion batch.
-- MAX_DELETES_PER_HOUR: Maximum deletions allowed per hour (5000 is the current default from Bluesky).
-- SAFE_MARGIN: A buffer to start waiting before hitting the exact limit.
-- DELAY_BETWEEN_BATCHES_MS: Milliseconds to wait between each batch.
+
+Then fill in `.env`, one numbered block per account:
+
+```ini
+BSKY_1_HANDLE=your-handle.bsky.social
+BSKY_1_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
+BSKY_1_DOMAINS=example.com
+
+BSKY_2_HANDLE=another-handle.example.com
+BSKY_2_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
+BSKY_2_DOMAINS=example.org,example.net
+```
+
+| Variable | Required | Meaning |
+|----------|----------|---------|
+| `BSKY_<n>_HANDLE` | yes | Account handle |
+| `BSKY_<n>_APP_PASSWORD` | yes | An [app password](https://bsky.app/settings/app-passwords), not your main password |
+| `BSKY_<n>_DOMAINS` | yes | Comma-separated bare domains to sweep |
+| `BSKY_<n>_SERVICE` | no | PDS or entryway URL, defaults to `https://bsky.social` |
+
+Numbering starts at 1 and must be contiguous. `.env` is git-ignored; never commit it.
+
+## Usage
+
+Deletion is permanent, so start with a dry run. It scans everything and reports how many posts would be deleted, without deleting any:
+
+```bash
+npm run sweep -- --dry-run
+```
+
+Then run it for real:
+
+```bash
+npm run sweep
+```
+
+| Option | Effect |
+|--------|--------|
+| `--dry-run` | Count matching posts without deleting |
+| `--account <handle>` | Only sweep this account; repeatable |
+| `--help` | Show usage |
+
+To restart a sweep from the beginning, delete `.sweep-state.json`.
+
+## Development
+
+```bash
+npm test           # node:test, no network access needed
+npm run typecheck
+```
+
+| File | Responsibility |
+|------|----------------|
+| `src/main.ts` | CLI entry: arguments, login, one sweep per account |
+| `src/config.ts` | Reads and validates accounts from the environment |
+| `src/match.ts` | Decides whether a post links to a target domain |
+| `src/sweep.ts` | The fetch, delete and checkpoint loop, with retry and rate-limit handling |
+| `src/checkpoint.ts` | Progress persistence |
